@@ -21,6 +21,21 @@ const listeningChannels: {
   }
 } = {}
 
+const updateListeningChannels = async () => {
+  await Deno.writeTextFile(
+    './listeningChannels.json',
+    JSON.stringify(listeningChannels)
+  )
+}
+
+try {
+  const json = await Deno.readTextFile('./listeningChannels.json')
+  Object.assign(listeningChannels, JSON.parse(json))
+} catch (e) {
+  console.log('listeningChannels.json not found, creating...')
+  await updateListeningChannels()
+}
+
 const client = new APIManager(Deno.env.get('BOT_TOKEN')!, {
   gateway: {
     intents: GatewayIntent.GUILD_MESSAGES | (1 << 15)
@@ -31,6 +46,9 @@ const openAI = new OpenAI()
 
 const createResponse = async (cid: string, content: string) => {
   const { threadID, lastMessageID } = listeningChannels[cid]
+  await client.post(`/channels/${cid}/typing`, {
+    body: {}
+  })
 
   await openAI.request({
     method: 'POST',
@@ -117,6 +135,7 @@ const createResponse = async (cid: string, content: string) => {
   })
 
   listeningChannels[cid].lastMessageID = msgs[0].id
+  updateListeningChannels()
 }
 
 client.spawnAndRunAll()
@@ -162,6 +181,7 @@ client.on('INTERACTION_CREATE', async (_, interaction) => {
         listeningChannels[channelID] = {
           threadID: thread.id
         }
+        updateListeningChannels()
         await client.post(
           `/interactions/${interaction.id}/${interaction.token}/callback`,
           {
