@@ -13,6 +13,4 @@ export type {
   MessagePayload
 } from '/Users/helloyunho/Projects/harmony/mod.ts'
 export { OpenAI } from 'https://raw.githubusercontent.com/Helloyunho/OpenAI-deno/main/mod.ts'
-// export type { ChatFormat } from 'https://raw.githubusercontent.com/Helloyunho/OpenAI-deno/main/mod.ts'
-// maybe later when i add more features to my openai deno module
-// for now im gonna use the raw rest api
+export { load } from 'https://deno.land/std@0.206.0/dotenv/mod.ts'

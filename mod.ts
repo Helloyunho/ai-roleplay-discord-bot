@@ -7,12 +7,12 @@ import {
   GuildThreadChannelPayload,
   InteractionResponsePayload,
   InteractionCallbackType,
-  OpenAI
+  OpenAI,
+  load
 } from './deps.ts'
-import { Message } from './types/message.ts'
-import { Run } from './types/run.ts'
-import { Thread } from './types/thread.ts'
 import { DISCORD_BOT_ID, OPENAI_ASSISTANT_ID } from './const.ts'
+
+const env = await load()
 
 const listeningChannels: {
   [key: string]: {
@@ -36,13 +36,13 @@ try {
   await updateListeningChannels()
 }
 
-const client = new APIManager(Deno.env.get('BOT_TOKEN')!, {
+const client = new APIManager(env.BOT_TOKEN, {
   gateway: {
     intents: GatewayIntent.GUILD_MESSAGES | (1 << 15)
   }
 })
 
-const openAI = new OpenAI()
+const openAI = new OpenAI(env.OPENAI_API_KEY)
 
 const createResponse = async (cid: string, content: string) => {
   const { threadID, lastMessageID } = listeningChannels[cid]
@@ -50,41 +50,17 @@ const createResponse = async (cid: string, content: string) => {
     body: {}
   })
 
-  await openAI.request({
-    method: 'POST',
-    url: `/threads/${threadID}/messages`,
-    body: {
-      role: 'user',
-      content: content
-    },
-    headers: {
-      'OpenAI-Beta': 'assistants=v1'
-    }
-  })
-  let run: Run = await openAI.request({
-    method: 'POST',
-    url: `/threads/${threadID}/runs`,
-    body: {
-      assistant_id: OPENAI_ASSISTANT_ID
-    },
-    headers: {
-      'OpenAI-Beta': 'assistants=v1'
-    }
-  })
+  await openAI.createMessage(threadID, 'user', content)
+  let run = await openAI.createRun(threadID, OPENAI_ASSISTANT_ID)
+
   while (!['failed', 'completed', 'expired'].includes(run.status)) {
-    run = await openAI.request({
-      method: 'GET',
-      url: `/threads/${threadID}/runs/${run.id}`,
-      headers: {
-        'OpenAI-Beta': 'assistants=v1'
-      }
-    })
+    run = await openAI.retrieveRun(threadID, run.id)
   }
   if (run.status === 'failed') {
     await client.post(`/channels/${cid}/messages`, {
       body: {
         content: `오류 발생!
-\`\`\`${run.last_error!.message}\`\`\`
+\`\`\`${run.lastError!.message}\`\`\`
 ...하지만 계속 이어서 할 수 있어요!`
       }
     })
@@ -98,15 +74,8 @@ const createResponse = async (cid: string, content: string) => {
     })
     return
   }
-  const { data: msgs }: { data: [Message] } = await openAI.request({
-    method: 'GET',
-    url: `/threads/${threadID}/messages`,
-    query: {
-      before: lastMessageID ?? ''
-    },
-    headers: {
-      'OpenAI-Beta': 'assistants=v1'
-    }
+  const msgs = await openAI.listMessages(threadID, {
+    before: lastMessageID
   })
 
   const assistantMsgs = msgs.filter((msg) => msg.role === 'assistant')
@@ -127,7 +96,7 @@ const createResponse = async (cid: string, content: string) => {
         .map((msg) =>
           msg.content
             .filter((c) => c.type === 'text')
-            .map((c) => c.text!.value)
+            .map((c) => (c as { type: 'text'; value: string }).value)
             .join('')
         )
         .join('\n\n')
@@ -171,17 +140,12 @@ client.on('INTERACTION_CREATE', async (_, interaction) => {
           )
           channelID = thread.id
         }
-        const thread: Thread = await openAI.request({
-          method: 'POST',
-          url: '/threads',
-          headers: {
-            'OpenAI-Beta': 'assistants=v1'
-          }
-        })
+        const thread = await openAI.createThread()
         listeningChannels[channelID] = {
           threadID: thread.id
         }
         updateListeningChannels()
+        console.log(interaction.id, interaction.token)
         await client.post(
           `/interactions/${interaction.id}/${interaction.token}/callback`,
           {
@@ -208,4 +172,16 @@ client.on('MESSAGE_CREATE', async (_, msg) => {
       await createResponse(msg.channel_id, msg.content)
     }
   }
+})
+
+client.on('ERROR', (_, err) => {
+  console.error(err)
+})
+
+client.on('CLOSED', (_, code, reconnectable, resumable) => {
+  console.log(code, reconnectable, resumable)
+})
+
+client.on('DEBUG', (_, msg) => {
+  console.log(msg)
 })
